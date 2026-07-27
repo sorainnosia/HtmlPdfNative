@@ -31,7 +31,7 @@ entirely in C#**:
 ## 🖼 Showcase
 
 Documents rendered entirely by HtmlPdfNative — straight from HTML/CSS, no browser involved.
-Sources live in [`../tauri_web/ui/content/`](../tauri_web/ui/content/).
+Sources live in [(https://pdfmaker.ink/web/)](https://pdfmaker.ink/web/).
 
 
 <table>
