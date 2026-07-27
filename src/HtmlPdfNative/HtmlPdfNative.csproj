@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>HtmlPdfNative</RootNamespace>
+    <AssemblyName>HtmlPdfNative</AssemblyName>
+    <Description>Native (managed) HTML/CSS -> PDF rendering engine. A .NET port of the Rust `pdfmaker` crate.</Description>
+    <PackageId>HtmlPdfNative</PackageId>
+    <IsPackable>true</IsPackable>
+
+    <!--
+      Asset delivery. The Rust build EMBEDS the fonts (zstd-compressed) into the binary.
+      Two options here, toggled by HtmlPdfEmbedAssets:
+        * false (default): ship the Assets/ tree as build output + package content (Assets loads
+          them from AppContext.BaseDirectory/Assets). Fast builds, ~51 MB alongside the DLL.
+        * true: embed every asset as a manifest resource so the DLL is self-contained like Rust.
+          Slower builds and a large DLL, but a single deployable file.
+    -->
+    <HtmlPdfEmbedAssets Condition="'$(HtmlPdfEmbedAssets)' == ''">false</HtmlPdfEmbedAssets>
+
+    <!-- Native-backed raster/shaping packages (SkiaSharp, HarfBuzz, ImageSharp 3). ON by default: enables the
+         software rasterizer used by filter:blur()/backdrop-filter. Set to false for a minimal pure-managed build. -->
+    <HtmlPdfUseExternalPackages Condition="'$(HtmlPdfUseExternalPackages)' == ''">true</HtmlPdfUseExternalPackages>
+    <DefineConstants Condition="'$(HtmlPdfUseExternalPackages)' == 'true'">$(DefineConstants);HTMLPDF_SKIA</DefineConstants>
+  </PropertyGroup>
+
+  <!-- ===== Vendored / ported "crates that Rust has but .NET doesn't" ===== -->
+  <!-- These were 10 separate projects; they are now compiled DIRECTLY into this single assembly from the
+       Vendor/ folder (PdfWriter, TtfParser, Subsetter, UnicodeBidi, Hyphenation, Shaping, SvgRender, EmojiColr,
+       VariableFonts, Compression). The default SDK source glob for this project picks them up — no references. -->
+
+  <!-- ===== Pure-managed dependencies used by the ported stages (always referenced) ===== -->
+  <ItemGroup>
+    <!-- scraper (HTML parse + DOM) -->
+    <PackageReference Include="AngleSharp" Version="1.1.2" />
+    <!-- pulldown-cmark (Markdown -> HTML) -->
+    <PackageReference Include="Markdig" Version="0.37.0" />
+    <!-- image (decode PNG/JPEG/GIF/BMP/WebP) — 2.1.x still supports netstandard2.0 -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.9" />
+  </ItemGroup>
+
+  <!-- ===== Native-backed equivalents, added as later phases need them (raster/shaping/images) =====
+       Gated by HtmlPdfUseExternalPackages so early phases build without pulling native assets. -->
+  <ItemGroup Condition="'$(HtmlPdfUseExternalPackages)' == 'true'">
+    <!-- SkiaSharp: software rasterizer for filter:blur()/backdrop-filter. The base package bundles Windows +
+         macOS natives; the Linux native asset is added for cross-platform CLI/server use. -->
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.8" />
+  </ItemGroup>
+
+  <!-- ===== Assets: fonts + typst_math (copied from ../../../fonts and ../../../assets) ===== -->
+  <ItemGroup Condition="'$(HtmlPdfEmbedAssets)' != 'true'">
+    <Content Include="Assets\**\*" Exclude="Assets\**\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <PackagePath>contentFiles\any\any\Assets;content\Assets</PackagePath>
+      <Pack>true</Pack>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="'$(HtmlPdfEmbedAssets)' == 'true'">
+    <EmbeddedResource Include="Assets\**\*">
+      <LogicalName>HtmlPdfNative.Assets.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>
