@@ -33,34 +33,35 @@ entirely in C#**:
 Documents rendered entirely by HtmlPdfNative — straight from HTML/CSS, no browser involved.
 Sources live in [`../tauri_web/ui/content/`](../tauri_web/ui/content/).
 
+
 <table>
   <tr>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example16.html"><img src="../docs/screenshots/analytics-dashboard.png" alt="Analytics dashboard (dark mode)"></a>
+    <img width="957" height="1349" alt="Example16" src="https://github.com/user-attachments/assets/0055fdc5-6c5e-4fad-82e2-68ee95c528e7" />
       <br><b>Analytics Dashboard</b><br><sub>Dark mode · gradients · KPI cards</sub>
     </td>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example9.html"><img src="../docs/screenshots/invoice.png" alt="Professional invoice"></a>
+      <img width="959" height="1351" alt="Example9" src="https://github.com/user-attachments/assets/a764ea15-fc8d-47ef-9a4b-f2e5e3795e73" />
       <br><b>Professional Invoice</b><br><sub>Clean tables · business layout</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example25.html"><img src="../docs/screenshots/creative-vision.png" alt="Creative vision report"></a>
+      <img width="958" height="866" alt="Example25" src="https://github.com/user-attachments/assets/02916462-edf5-4e53-9f9f-ea951b43e8df" />
       <br><b>Creative Vision</b><br><sub>Bold type · vivid gradients</sub>
     </td>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example29.html"><img src="../docs/screenshots/performance-report.png" alt="Business performance report"></a>
-      <br><b>Performance Report</b><br><sub>Charts · tables · corporate style</sub>
+      <img width="1110" height="944" alt="Example28" src="https://github.com/user-attachments/assets/d61551f2-72de-4ef6-b631-6f509cc92a8d" />
+      <br><b>Annual Performance Report</b><br><sub>Charts · tables · corporate style</sub>
     </td>
   </tr>
   <tr>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example18.html"><img src="../docs/screenshots/arabic-rtl.png" alt="Arabic right-to-left document"></a>
+      <img width="954" height="1350" alt="Example18" src="https://github.com/user-attachments/assets/fb5c87b2-dd23-409a-966c-23362c35dd2e" />
       <br><b>Arabic (RTL)</b><br><sub>Right‑to‑left shaping &amp; bidi</sub>
     </td>
     <td width="50%" align="center">
-      <a href="../tauri_web/ui/content/Example17.html"><img src="../docs/screenshots/chinese-cjk.png" alt="Chinese CJK report"></a>
+      <img width="1112" height="1367" alt="Example17" src="https://github.com/user-attachments/assets/09ada836-2669-4dc3-a609-4a0e99c0a00c" />
       <br><b>Chinese (CJK)</b><br><sub>Embedded CJK fonts</sub>
     </td>
   </tr>
