@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Executable: single modern target (override the multi-target from Directory.Build.props). -->
+    <TargetFrameworks></TargetFrameworks>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>HtmlPdfNative.Cli</RootNamespace>
+    <AssemblyName>htmlpdf</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\HtmlPdfNative\HtmlPdfNative.csproj" />
+  </ItemGroup>
+
+</Project>
