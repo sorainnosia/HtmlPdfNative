@@ -1,0 +1,36 @@
+Font Licenses
+=============
+
+This folder contains embedded fonts used by PDFMaker.
+
+
+NOTO SANS FONTS
+---------------
+Copyright 2015-2021 Google LLC
+
+Files:
+- NotoSansArabic-Regular.ttf
+- NotoSansHebrew-Regular.ttf
+- NotoSansJP-Regular.otf
+- NotoSansKR-Regular.otf
+- NotoSansSC-Regular.otf
+- NotoSansTC-Regular.otf
+
+Licensed under the SIL Open Font License, Version 1.1.
+http://scripts.sil.org/OFL
+
+
+ROBOTO FONT
+-----------
+Copyright 2011 Google LLC
+
+Files:
+- Roboto-Regular.ttf
+
+Licensed under the Apache License, Version 2.0.
+http://www.apache.org/licenses/LICENSE-2.0
+
+
+================================================================================
+
+Full license texts are available in the NOTICES file in the project root.
