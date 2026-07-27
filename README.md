@@ -161,8 +161,7 @@ Pure‑managed by default: **AngleSharp** (HTML parse/DOM), **Markdig** (Markdow
 
 ## 🔗 About
 
-HtmlPdfNative is the .NET port of **[PDFMaker](../README.md)** (Rust). See the parent project for the
-website, the browser (WASM) app, and the Windows/Android downloads — and [`PLAN.md`](PLAN.md) for the
-port's crate map and design notes.
+HtmlPdfNative is the .NET port of **[PDFMaker]([..](https://github.com/sorainnosia/PDFMaker/README.md)** (Rust). See the parent project for the
+website, the browser (WASM) app, and the Windows/Android downloads.
 
 <div align="center"><sub>HTML to beautiful PDF, in managed .NET — anywhere.</sub></div>
