@@ -1,0 +1,42 @@
+<Project>
+  <!--
+    Shared MSBuild properties for every project in the HtmlPdfNative solution.
+    This is the .NET port of the Rust `pdfmaker` HTML->PDF engine.
+
+    Multi-targeting goal: be usable from as many .NET runtimes as possible.
+      * netstandard2.0  -> .NET Framework 4.6.1+, .NET Core 2.0+, Mono, Unity, Xamarin
+      * net6.0          -> LTS, spans/SIMD, modern BCL
+      * net8.0          -> current LTS, best JIT + trimming
+    Individual projects can narrow this via <TargetFrameworks> if a dependency
+    (e.g. an executable) only supports newer runtimes.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net6.0;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <NeutralLanguage>en</NeutralLanguage>
+
+    <!-- Package identity (shared) -->
+    <Company>sorainnosia.com</Company>
+    <Product>HtmlPdfNative</Product>
+    <Version>0.1.0</Version>
+    <Authors>sorainnosia</Authors>
+    <Copyright>Copyright (c) sorainnosia.com</Copyright>
+    <PackageProjectUrl>https://github.com/sorainnosia/pdfmaker</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- netstandard2.0 lacks nullable annotations for the BCL; silence the noise there. -->
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625;CS1591;NU1701</NoWarn>
+  </PropertyGroup>
+
+  <!-- Polyfills so netstandard2.0 can use modern language features (records, init, ranges…). -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Bcl.HashCode" Version="1.1.1" />
+  </ItemGroup>
+</Project>
