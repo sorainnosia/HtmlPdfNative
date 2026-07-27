@@ -6,7 +6,7 @@
 
 **No headless browser. No Chromium. No WebView. No native dependencies.**
 
-HtmlPdfNative is a **pure‑managed .NET port** of the Rust [`pdfmaker`]([https://pdfmaker.ink/web/]) engine. It parses
+HtmlPdfNative is a **pure‑managed .NET port** of the Rust [[`pdfmaker`]([https://pdfmaker.ink/web/])](https://pdfmaker.ink/web/) engine. It parses
 HTML, computes the CSS cascade, lays out the page, and draws every glyph, gradient, and shape itself —
 so it's small, deterministic, fully self‑contained, and produces identical output everywhere .NET runs.
 
@@ -31,7 +31,7 @@ entirely in C#**:
 ## 🖼 Showcase
 
 Documents rendered entirely by HtmlPdfNative — straight from HTML/CSS, no browser involved.
-Sources live in [`pdfmaker`]([https://pdfmaker.ink/web/]).
+Sources live in [[`pdfmaker`]([https://pdfmaker.ink/web/])](https://pdfmaker.ink/web/).
 
 
 <table>
@@ -161,7 +161,7 @@ Pure‑managed by default: **AngleSharp** (HTML parse/DOM), **Markdig** (Markdow
 
 ## 🔗 About
 
-HtmlPdfNative is the .NET port of **[PDFMaker]([..](https://github.com/sorainnosia/PDFMaker/README.md)** (Rust). See the parent project for the
+HtmlPdfNative is the .NET port of **[PDFMaker]([https://github.com/sorainnosia/PDFMaker/README.md](https://github.com/sorainnosia/PDFMaker/README.md)** (Rust). See the parent project for the
 website, the browser (WASM) app, and the Windows/Android downloads.
 
 <div align="center"><sub>HTML to beautiful PDF, in managed .NET — anywhere.</sub></div>
