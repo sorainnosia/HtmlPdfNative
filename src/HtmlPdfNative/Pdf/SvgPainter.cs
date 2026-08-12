@@ -24,6 +24,7 @@ namespace HtmlPdfNative.Pdf
         {
             public bool HasFill; public Color Fill;
             public bool HasStroke; public Color Stroke;
+            public float FillOp; public float StrokeOp;   // fill-opacity / stroke-opacity (0..1), inherited; combined with the paint's rgba() alpha
             public float StrokeW;
             public float FontSize; public bool Bold; public bool Italic; public string? Family; public int Anchor; // 0 start,1 middle,2 end
             public int Cap; // stroke-linecap: 0 butt, 1 round, 2 square
@@ -37,10 +38,16 @@ namespace HtmlPdfNative.Pdf
 
         [ThreadStatic] private static Dictionary<EmbeddedFont, string>? _embRes;
 
+        // Shared /ExtGState registry (opacity byte → resource name), set per Paint so a shape's fill/stroke alpha
+        // (rgba() paint or fill-opacity/stroke-opacity) can reference a `/GSx gs` — otherwise semi-transparent SVG
+        // fills (e.g. Example34 radar `fill:rgba(63,124,172,.35)`) render fully opaque.
+        [ThreadStatic] private static Dictionary<byte, string>? _alphaRes;
+
         /// <summary>Emit the PDF content-stream fragment for one placed SVG (y measured from page top, pt).</summary>
-        public static string Paint(SvgDraw d, float pageHeight, Dictionary<FontFace, string> faceRes, Dictionary<EmbeddedFont, string>? embRes = null)
+        public static string Paint(SvgDraw d, float pageHeight, Dictionary<FontFace, string> faceRes, Dictionary<EmbeddedFont, string>? embRes = null, Dictionary<byte, string>? alphaRes = null)
         {
             _embRes = embRes;
+            _alphaRes = alphaRes;
             var svg = d.Svg;
             float vbX = 0, vbY = 0, vbW = 0, vbH = 0;
             if (svg.Attributes.TryGetValue("viewBox", out var vb))
@@ -65,12 +72,60 @@ namespace HtmlPdfNative.Pdf
 
             _grads = CollectGradients(svg);       // resolve url(#id) fills to a representative colour
             _styles = d.Styles; _vars = d.Vars;   // cascade context for class/tag-styled children + var() in attrs
-            var root = new Ctx { HasFill = true, Fill = Color.Black, HasStroke = false, Stroke = Color.Black, StrokeW = 1f, FontSize = 16f, Anchor = 0 };
+            var root = new Ctx { HasFill = true, Fill = Color.Black, HasStroke = false, Stroke = Color.Black, StrokeW = 1f, FillOp = 1f, StrokeOp = 1f, FontSize = 16f, Anchor = 0 };
             root = Resolve(svg, root);            // root <svg> may carry presentation attrs
             foreach (var child in svg.Children) PaintNode(sb, child, root, faceRes);
 
             sb.Append("Q\n");
             return sb.ToString();
+        }
+
+        /// <summary>Pre-scan (for the ExtGState pass): every distinct fill/stroke opacity byte (&lt;255) used by any shape
+        /// in this SVG — so PdfGenerator can allocate a shared `/ExtGState` for each before the content stream is emitted.</summary>
+        public static IEnumerable<byte> UsedAlphas(SvgDraw d)
+        {
+            var set = new HashSet<byte>();
+            _styles = d.Styles; _vars = d.Vars; _grads = CollectGradients(d.Svg);
+            var root = new Ctx { HasFill = true, Fill = Color.Black, HasStroke = false, Stroke = Color.Black, StrokeW = 1f, FillOp = 1f, StrokeOp = 1f, FontSize = 16f, Anchor = 0 };
+            root = Resolve(d.Svg, root);
+            CollectAlphas(d.Svg, root, set);
+            return set;
+        }
+
+        private static void CollectAlphas(Dom.Node n, Ctx parent, HashSet<byte> set)
+        {
+            if (n.IsText || n.Tag == null) return;
+            switch (n.Tag)
+            {
+                case "defs": case "title": case "desc": case "style": case "metadata":
+                case "clippath": case "mask": case "symbol": case "lineargradient": case "radialgradient":
+                    return;
+            }
+            var ctx = Resolve(n, parent);
+            switch (n.Tag)
+            {
+                case "g": case "a": case "svg":
+                    foreach (var c in n.Children) CollectAlphas(c, ctx, set);
+                    break;
+                case "rect": case "circle": case "ellipse": case "polygon": case "path": case "text":
+                    if (ctx.HasFill) { byte fa = EffAlpha(ctx.Fill, ctx.FillOp); if (fa < 255) set.Add(fa); }
+                    if (ctx.HasStroke) { byte sa = EffAlpha(ctx.Stroke, ctx.StrokeOp); if (sa < 255) set.Add(sa); }
+                    break;
+                case "line": case "polyline":
+                    if (ctx.HasStroke) { byte sa = EffAlpha(ctx.Stroke, ctx.StrokeOp); if (sa < 255) set.Add(sa); }
+                    break;
+                default:
+                    foreach (var c in n.Children) CollectAlphas(c, ctx, set);
+                    break;
+            }
+        }
+
+        /// <summary>Effective 0..255 alpha of a paint = its rgba() alpha × the fill/stroke-opacity multiplier.</summary>
+        private static byte EffAlpha(Color c, float op)
+        {
+            float a = (c.A / 255f) * (op <= 0f ? 0f : op > 1f ? 1f : op);
+            int v = (int)Math.Round(a * 255f);
+            return (byte)(v < 0 ? 0 : v > 255 ? 255 : v);
         }
 
         private static void PaintNode(StringBuilder sb, Dom.Node n, Ctx parent, Dictionary<FontFace, string> faceRes)
@@ -134,6 +189,13 @@ namespace HtmlPdfNative.Pdf
                 else { var c = ColorOf(stroke); if (c.HasValue) { ctx.HasStroke = true; ctx.Stroke = c.Value; } }
             }
             if (sw != null && Num(sw.Replace("px", ""), out var w)) ctx.StrokeW = Math.Max(0f, w);
+            // fill-opacity / stroke-opacity (inherited); `opacity` on a shape ≈ multiply both (group compositing approximated per-shape).
+            string? fo = Prop(n, "fill-opacity");
+            if (fo != null && Num(fo.Replace("%", ""), out var fov)) ctx.FillOp = fo.Contains("%") ? fov / 100f : fov;
+            string? so = Prop(n, "stroke-opacity");
+            if (so != null && Num(so.Replace("%", ""), out var sov)) ctx.StrokeOp = so.Contains("%") ? sov / 100f : sov;
+            string? op = InlineStyle(n, "opacity") ?? (n.Attributes.TryGetValue("opacity", out var opa) ? opa : null);
+            if (op != null && Num(op.Replace("%", ""), out var opv)) { float o = op.Contains("%") ? opv / 100f : opv; ctx.FillOp *= o; ctx.StrokeOp *= o; }
             string? cap = Prop(n, "stroke-linecap");
             if (cap != null) { var s = cap.Trim().ToLowerInvariant(); ctx.Cap = s == "round" ? 1 : s == "square" ? 2 : 0; }
             string? dash = Prop(n, "stroke-dasharray");
@@ -716,34 +778,73 @@ namespace HtmlPdfNative.Pdf
         private static void Fill(StringBuilder sb, string path, Ctx ctx)
         {
             if (string.IsNullOrEmpty(path)) return;
-            if (ctx.HasFill)
+
+            byte fa = ctx.HasFill ? EffAlpha(ctx.Fill, ctx.FillOp) : (byte)255;
+            byte sa = ctx.HasStroke ? EffAlpha(ctx.Stroke, ctx.StrokeOp) : (byte)255;
+            string? fgs = GsName(fa), sgs = GsName(sa);
+
+            // Fully opaque (the common case): emit exactly as before — no q/Q, no gs — so opaque SVGs are byte-identical.
+            if (fgs == null && sgs == null)
             {
-                var (r, g, b) = ctx.Fill.Rgb01();
-                sb.Append(F(r)).Append(' ').Append(F(g)).Append(' ').Append(F(b)).Append(" rg\n");
+                EmitFillState(sb, ctx);
+                EmitStrokeState(sb, ctx);
+                sb.Append(path);
+                sb.Append(ctx.HasFill && ctx.HasStroke ? "B\n" : ctx.HasFill ? "f\n" : ctx.HasStroke ? "S\n" : "n\n");
+                return;
             }
-            if (ctx.HasStroke)
+
+            // Fill and stroke need DIFFERENT graphics-state alpha (e.g. semi-transparent fill + opaque stroke, the radar):
+            // PDF `gs` sets fill (/ca) and stroke (/CA) together, so paint the two in separate wrapped passes.
+            if (ctx.HasFill && ctx.HasStroke && fgs != sgs)
             {
-                var (r, g, b) = ctx.Stroke.Rgb01();
-                sb.Append(F(r)).Append(' ').Append(F(g)).Append(' ').Append(F(b)).Append(" RG\n");
-                sb.Append(F(ctx.StrokeW)).Append(" w\n");
-                sb.Append(ctx.Cap).Append(" J\n");   // line cap: 0 butt / 1 round / 2 square
-                // stroke-dasharray/-dashoffset → PDF dash pattern (drives progress-ring / gauge partial arcs)
-                if (!string.IsNullOrEmpty(ctx.Dash))
-                {
-                    var dnums = new List<float>();
-                    foreach (var t in ctx.Dash!.Replace(",", " ").Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
-                        if (Num(t.Replace("px", ""), out var dv) && dv >= 0) dnums.Add(dv);
-                    if (dnums.Count > 0)
-                    {
-                        sb.Append('[');
-                        for (int i = 0; i < dnums.Count; i++) { if (i > 0) sb.Append(' '); sb.Append(F(dnums[i])); }
-                        sb.Append("] ").Append(F(ctx.DashOffset)).Append(" d\n");
-                    }
-                }
-                else sb.Append("[] 0 d\n");   // reset any inherited dash so solid strokes stay solid
+                sb.Append("q\n"); if (fgs != null) sb.Append('/').Append(fgs).Append(" gs\n");
+                EmitFillState(sb, ctx); sb.Append(path); sb.Append("f\n"); sb.Append("Q\n");
+                sb.Append("q\n"); if (sgs != null) sb.Append('/').Append(sgs).Append(" gs\n");
+                EmitStrokeState(sb, ctx); sb.Append(path); sb.Append("S\n"); sb.Append("Q\n");
+                return;
             }
+
+            // Single alpha (fill-only, stroke-only, or fill+stroke sharing one alpha): one wrapped pass so `gs` doesn't leak.
+            sb.Append("q\n");
+            string? gs = ctx.HasFill ? fgs : sgs;
+            if (gs != null) sb.Append('/').Append(gs).Append(" gs\n");
+            EmitFillState(sb, ctx);
+            EmitStrokeState(sb, ctx);
             sb.Append(path);
             sb.Append(ctx.HasFill && ctx.HasStroke ? "B\n" : ctx.HasFill ? "f\n" : ctx.HasStroke ? "S\n" : "n\n");
+            sb.Append("Q\n");
+        }
+
+        private static string? GsName(byte a) => a < 255 && _alphaRes != null && _alphaRes.TryGetValue(a, out var n) ? n : null;
+
+        private static void EmitFillState(StringBuilder sb, Ctx ctx)
+        {
+            if (!ctx.HasFill) return;
+            var (r, g, b) = ctx.Fill.Rgb01();
+            sb.Append(F(r)).Append(' ').Append(F(g)).Append(' ').Append(F(b)).Append(" rg\n");
+        }
+
+        private static void EmitStrokeState(StringBuilder sb, Ctx ctx)
+        {
+            if (!ctx.HasStroke) return;
+            var (r, g, b) = ctx.Stroke.Rgb01();
+            sb.Append(F(r)).Append(' ').Append(F(g)).Append(' ').Append(F(b)).Append(" RG\n");
+            sb.Append(F(ctx.StrokeW)).Append(" w\n");
+            sb.Append(ctx.Cap).Append(" J\n");   // line cap: 0 butt / 1 round / 2 square
+            // stroke-dasharray/-dashoffset → PDF dash pattern (drives progress-ring / gauge partial arcs)
+            if (!string.IsNullOrEmpty(ctx.Dash))
+            {
+                var dnums = new List<float>();
+                foreach (var t in ctx.Dash!.Replace(",", " ").Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+                    if (Num(t.Replace("px", ""), out var dv) && dv >= 0) dnums.Add(dv);
+                if (dnums.Count > 0)
+                {
+                    sb.Append('[');
+                    for (int i = 0; i < dnums.Count; i++) { if (i > 0) sb.Append(' '); sb.Append(F(dnums[i])); }
+                    sb.Append("] ").Append(F(ctx.DashOffset)).Append(" d\n");
+                }
+            }
+            else sb.Append("[] 0 d\n");   // reset any inherited dash so solid strokes stay solid
         }
 
         private static void M(StringBuilder p, float x, float y) => p.Append(F(x)).Append(' ').Append(F(y)).Append(" m\n");

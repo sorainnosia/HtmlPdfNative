@@ -187,7 +187,7 @@ namespace HtmlPdfNative.Layout
         private static void LayoutBlock(StyledNode node, float x, float y, float availWidth, LayoutBox box,
             string? marker, float? forcedBorderBoxWidth = null, float? forcedBorderBoxHeight = null, LayoutBox? posHost = null,
             FloatCtx? floats = null, bool noBorder = false, bool suppressDecor = false, bool ignoreVertical = false,
-            float? availHeight = null)
+            float? availHeight = null, bool flexItemDefiniteCross = false)
         {
             if (node.Node.Tag == "img") { LayoutImage(node, x, y, availWidth, box, forcedBorderBoxWidth); return; }
             if (node.Node.Tag == "svg") { LayoutSvg(node, x, y, availWidth, box, forcedBorderBoxWidth); return; }
@@ -227,8 +227,12 @@ namespace HtmlPdfNative.Layout
             float? childAvailH = selfDefH.HasValue ? Math.Max(0f, s.BoxSizing == "border-box" ? selfDefH.Value - bt - bb - s.PadTop - s.PadBottom : selfDefH.Value) : (float?)null;
             // A FLEX/GRID item in a definite-height container gets a definite cross size (the line height, passed as
             // availHeight) even without its own `height` — so ITS flex/grid children can resolve their `height:%`
-            // (e.g. combo-col → combo-bar). Plain block boxes must NOT do this (block %-height needs a definite parent).
-            if (childAvailH == null && availHeight.HasValue && availHeight.Value > 0f && (s.Display == "flex" || s.Display == "grid"))
+            // (e.g. combo-col → combo-bar). Plain block boxes must NOT do this (block %-height needs a definite parent)
+            // UNLESS the box IS a flex item in a definite-height flex line (flexItemDefiniteCross): then the flex line's
+            // cross size IS the item's definite content height, so a %-height BLOCK child (e.g. Example34 .bar-item → .bar
+            // vertical bars) resolves against it — matching Rust pdfmaker (Chrome instead collapses these to min-height).
+            if (childAvailH == null && availHeight.HasValue && availHeight.Value > 0f
+                && (s.Display == "flex" || s.Display == "grid" || flexItemDefiniteCross))
                 childAvailH = Math.Max(0f, availHeight.Value - bt - bb - s.PadTop - s.PadBottom);
 
             float contentWidth, borderBoxWidth;
@@ -336,7 +340,7 @@ namespace HtmlPdfNative.Layout
             else if (s.Display == "flex")
             {
                 cursorY += (s.FlexDirection == "column" || s.FlexDirection == "column-reverse")
-                    ? LayoutFlexColumn(node, box, contentX, contentTop, contentWidth, childHost)
+                    ? LayoutFlexColumn(node, box, contentX, contentTop, contentWidth, childHost, childAvailH)
                     : LayoutFlexRow(node, box, contentX, contentTop, contentWidth, childHost, childAvailH);
             }
             else if (s.Display == "table")
@@ -624,6 +628,7 @@ namespace HtmlPdfNative.Layout
             // LaTeX-math placeholder (<img data-latex>): render to a bitmap now, using the computed font-size/colour,
             // and use the math metrics (pt) as the intrinsic size. The baseline drop aligns inline math to the text.
             HtmlPdfNative.Images.DecodedImage? dec; float? mathW = null, mathH = null;
+            Dom.Node? imgSvg = null; float? svgIw = null, svgIh = null;   // <img> pointing at an SVG → drawn as vectors
             if (node.Node.Attributes.TryGetValue("data-latex", out var latex))
             {
                 var mi = HtmlPdfNative.MathTex.MathRenderer.Render(latex, s.FontSizePt, s.Color,
@@ -634,12 +639,28 @@ namespace HtmlPdfNative.Layout
             else
             {
                 node.Node.Attributes.TryGetValue("src", out var src);
-                dec = HtmlPdfNative.Images.ImageLoader.Load(src);
+                imgSvg = HtmlPdfNative.Images.ImageLoader.LoadSvgNode(src);   // base64 / file / url / relative → SVG
+                if (imgSvg != null)
+                {
+                    dec = null;
+                    // Intrinsic size from the SVG's width/height attrs, else its viewBox (CSS px).
+                    float vbW = 0, vbH = 0;
+                    if (imgSvg.Attributes.TryGetValue("viewBox", out var vb))
+                    {
+                        var pp = vb.Replace(",", " ").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (pp.Length == 4) { float.TryParse(pp[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out vbW); float.TryParse(pp[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out vbH); }
+                    }
+                    float SvgAttrPx(string a) { if (imgSvg.Attributes.TryGetValue(a, out var v) && float.TryParse(v.Trim().Replace("px", ""), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f)) return f; return 0f; }
+                    float wpx = SvgAttrPx("width"), hpx = SvgAttrPx("height");
+                    svgIw = (wpx > 0 ? wpx : (vbW > 0 ? vbW : 100f)) * Lib.PxToPt;
+                    svgIh = (hpx > 0 ? hpx : (vbH > 0 ? vbH : 100f)) * Lib.PxToPt;
+                }
+                else dec = HtmlPdfNative.Images.ImageLoader.Load(src);
             }
 
             // Intrinsic size in pt (image px -> pt), with attribute fallbacks.
-            float iw = mathW ?? (dec != null ? dec.Width * Lib.PxToPt : (AttrF(node, "width") ?? 100f) * Lib.PxToPt);
-            float ih = mathH ?? (dec != null ? dec.Height * Lib.PxToPt : (AttrF(node, "height") ?? 100f) * Lib.PxToPt);
+            float iw = mathW ?? svgIw ?? (dec != null ? dec.Width * Lib.PxToPt : (AttrF(node, "width") ?? 100f) * Lib.PxToPt);
+            float ih = mathH ?? svgIh ?? (dec != null ? dec.Height * Lib.PxToPt : (AttrF(node, "height") ?? 100f) * Lib.PxToPt);
             if (iw <= 0) iw = 100; if (ih <= 0) ih = 100;
 
             float? cw = mathW != null ? (float?)null : s.Width;
@@ -669,8 +690,14 @@ namespace HtmlPdfNative.Layout
             float top = y + s.MarginTop;
             float contentTop = top + bt + s.PadTop;
 
-            if (dec != null && s.Filter != null) dec = ApplyImageFilter(dec, s.Filter); // CSS filter (grayscale/…)
-            if (dec != null)
+            // <img> whose src is an SVG → draw it as VECTORS (same path as an inline <svg>), scaled to the box.
+            if (imgSvg != null)
+            {
+                box.Svgs.Add(new SvgDraw { X = contentX, Y = contentTop, Width = dispW, Height = dispH,
+                    Svg = imgSvg, Styles = new Dictionary<Dom.Node, ComputedStyle>(), Vars = s.Vars });
+            }
+            else if (dec != null && s.Filter != null) dec = ApplyImageFilter(dec, s.Filter); // CSS filter (grayscale/…)
+            if (imgSvg == null && dec != null)
             {
                 // object-fit: when the box size differs from intrinsic, fit/position the image inside it (clipped).
                 if (s.ObjectFit != "fill" && (Math.Abs(dispW - iw) > 0.5f || Math.Abs(dispH - ih) > 0.5f))
@@ -704,7 +731,7 @@ namespace HtmlPdfNative.Layout
                     box.Images.Insert(0, new ImageDraw { X = contentX + dx * Lib.PxToPt, Y = contentTop + dy * Lib.PxToPt, Width = dispW, Height = dispH, Image = shadow });
                 }
             }
-            else
+            else if (imgSvg == null)
                 box.Decorations.Add(new SolidRect { X = contentX, Y = contentTop, Width = dispW, Height = dispH, Color = new Color(224, 224, 224) });
 
             float borderBoxWidth = dispW + s.PadLeft + s.PadRight + bl + brw;
@@ -817,7 +844,7 @@ namespace HtmlPdfNative.Layout
         {
             var dn = new Dom.Node { Tag = "div", Parent = parent.Node };
             var p = parent.Style;
-            var st = new ComputedStyle { Display = "block", FontFamily = p.FontFamily, FontSizePt = p.FontSizePt, Color = p.Color, TextAlign = p.TextAlign, LineHeightPt = p.LineHeightPt, LineHeightMul = p.LineHeightMul, Bold = p.Bold, Italic = p.Italic };
+            var st = new ComputedStyle { Display = "block", FontFamily = p.FontFamily, FontSizePt = p.FontSizePt, Color = p.Color, TextAlign = p.TextAlign, LineHeightPt = p.LineHeightPt, LineHeightMul = p.LineHeightMul, Bold = p.Bold, Weight = p.Weight, Italic = p.Italic };
             return StyledNode.CreateAnonymous(dn, st);
         }
 
@@ -974,7 +1001,7 @@ namespace HtmlPdfNative.Layout
                 itemBoxes[i] = ib;
                 // Pass the container's definite content height so a flex item's own `height:%` resolves (e.g. the
                 // color-scale/vertical bars) — without it the % is indefinite and the item collapses to 0/min-height.
-                LayoutBlock(items[i], cursorX, top, finalW[i], ib, null, forcedBorderBoxWidth: finalW[i], posHost: posHost, availHeight: crossHeight);
+                LayoutBlock(items[i], cursorX, top, finalW[i], ib, null, forcedBorderBoxWidth: finalW[i], posHost: posHost, availHeight: crossHeight, flexItemDefiniteCross: crossHeight.HasValue);
                 maxH = Math.Max(maxH, ib.BorderBoxHeight);
                 cursorX += finalW[i] + gap + betweenExtra;
             }
@@ -1072,7 +1099,7 @@ namespace HtmlPdfNative.Layout
 
         // ---- flex (column) ------------------------------------------------------------------------
 
-        private static float LayoutFlexColumn(StyledNode node, LayoutBox box, float x, float top, float width, LayoutBox? posHost)
+        private static float LayoutFlexColumn(StyledNode node, LayoutBox box, float x, float top, float width, LayoutBox? posHost, float? contentHeight = null)
         {
             var items = new List<StyledNode>();
             CollectFlexItems(node, items, posHost);
@@ -1108,8 +1135,10 @@ namespace HtmlPdfNative.Layout
             }
 
             // Definite container height → distribute vertical free space by flex-grow/shrink (re-lay at forced height).
+            // `contentHeight` (the definite content height passed by the caller — e.g. a `height:100%` column flex like
+            // Example34 `.group`) is used when there's no explicit `height`, so `flex:1` children (`.group-bars`) still grow.
             var finalH = (float[])mainH.Clone();
-            float? containerH = node.Style.Height;
+            float? containerH = node.Style.Height ?? contentHeight;
             bool grew = false;
             if (containerH.HasValue)
             {
@@ -1127,7 +1156,9 @@ namespace HtmlPdfNative.Layout
                     if (Math.Abs(finalH[i] - mainH[i]) > 0.5f)
                     {
                         var ib = new LayoutBox(items[i]);
-                        LayoutBlock(items[i], x, top, crossW[i], ib, null, forcedBorderBoxWidth: crossW[i], forcedBorderBoxHeight: finalH[i], posHost: posHost);
+                        // Pass the item's now-definite (grown) height as availHeight + flexItemDefiniteCross so ITS
+                        // flex/grid/block children can resolve `height:%` against it (Example34 .group-bars → .gbar bars).
+                        LayoutBlock(items[i], x, top, crossW[i], ib, null, forcedBorderBoxWidth: crossW[i], forcedBorderBoxHeight: finalH[i], posHost: posHost, availHeight: finalH[i], flexItemDefiniteCross: true);
                         boxes[i] = ib; finalH[i] = ib.BorderBoxHeight;
                     }
             }
@@ -3140,7 +3171,14 @@ namespace HtmlPdfNative.Layout
                         // so the text wraps beside exactly that many lines then clears — e.g. a 42px/0.8 cap over 12px
                         // body text spans 2 lines.
                         float bodyLh = context.EffectiveLineHeightPt;
-                        int nLines = bodyLh > 0.1f ? Math.Max(1, (int)Math.Round(firstLetter.EffectiveLineHeightPt / bodyLh)) : 1;
+                        // The drop-cap float is the ::first-letter's MARGIN box, so its vertical padding counts toward
+                        // how many body lines it spans (Chrome parity). Omitting padding-top made a `line-height:0.75;
+                        // padding-top:9px` cap span 1 line, not 2, so the 2nd line overlapped the glyph (letter.html).
+                        float capH = firstLetter.EffectiveLineHeightPt + firstLetter.PadTop + firstLetter.PadBottom;
+                        // Chrome indents EVERY body line whose top falls within the drop-cap float box, i.e.
+                        // floor((capH-ε)/bodyLh)+1 — NOT round(capH/bodyLh). round() under-counts a cap that spans
+                        // e.g. 2.4 lines (Example32: gives 2, Chrome gives 3, so line 3 overlapped the glyph).
+                        int nLines = bodyLh > 0.1f ? Math.Max(1, (int)Math.Floor((capH - 0.5f) / bodyLh) + 1) : 1;
                         float fH = nLines * bodyLh;
                         bool leftF = firstLetter.Float != "right";
                         float fx0 = leftF ? x : x + width - fW;
@@ -3170,6 +3208,11 @@ namespace HtmlPdfNative.Layout
             float y = top;
             int i = 0;
             bool firstLine = true;
+            // Wrapped inline background/border: track which inline elements already had a fragment on a
+            // previous line so their START (left) border is drawn only on the first fragment, and detect
+            // continuation to the next line so the END (right) border is drawn only on the last — Chrome
+            // leaves the inner edges at each wrap OPEN (see EmitInlineBackgrounds).
+            var startedInline = new HashSet<ComputedStyle>();
             int lineNo = 0;   // for -webkit-line-clamp
             float textIndent = context.TextIndent + context.TextIndentPct * width; // first-line indent (pt)
             // ::first-line font-size: scale the first line's word widths / line-height / glyphs by this ratio (1 = no change).
@@ -3374,7 +3417,10 @@ namespace HtmlPdfNative.Layout
                     deco.Add((w.Atomic != null ? null : w.Style, cx, cx + ww));
                     cx += ww;
                 }
-                EmitInlineBackgrounds(box, placed, y, lineHeight);
+                // The next word to be placed (if any) belongs to the following line; if it shares an
+                // inline element with a segment on THIS line, that element continues → keep its right edge open.
+                ComputedStyle? nextEl = (i < words.Count && words[i].Atomic == null) ? words[i].BgStyle : null;
+                EmitInlineBackgrounds(box, placed, y, lineHeight, startedInline, nextEl);
                 EmitTextDecorations(box, deco, y, lineHeight);
                 y += lineHeight;
                 firstLine = false;
@@ -3392,7 +3438,8 @@ namespace HtmlPdfNative.Layout
         /// background or border, grouping consecutive words sharing the same inline element. Painted behind
         /// the line's text (box.Decorations render before TextRuns). Padding/borders are applied at each
         /// line-segment's ends (over-drawn at wrap points vs CSS — a known simplification).</summary>
-        private static void EmitInlineBackgrounds(LayoutBox box, List<(ComputedStyle? bg, float x0, float x1)> placed, float y, float lineHeight)
+        private static void EmitInlineBackgrounds(LayoutBox box, List<(ComputedStyle? bg, float x0, float x1)> placed, float y, float lineHeight,
+            HashSet<ComputedStyle>? startedInline = null, ComputedStyle? nextLineEl = null)
         {
             int i = 0;
             while (i < placed.Count)
@@ -3405,6 +3452,11 @@ namespace HtmlPdfNative.Layout
                 while (j < placed.Count && ReferenceEquals(placed[j].bg, st)) j++;
                 float x1 = placed[j - 1].x1;
 
+                // First fragment of this element? (not seen on an earlier line) — draws the LEFT edge.
+                // Continues to the next line? — then the RIGHT edge stays OPEN (Chrome parity).
+                bool isFirstFrag = startedInline == null || startedInline.Add(st);
+                bool continues = nextLineEl != null && ReferenceEquals(nextLineEl, st);
+
                 float rx = x0 - st.PadLeft, ry = y - st.PadTop;
                 float rw = (x1 - x0) + st.PadLeft + st.PadRight, rh = lineHeight + st.PadTop + st.PadBottom;
                 if (hasBg) box.Decorations.Add(new SolidRect { X = rx, Y = ry, Width = rw, Height = rh, Color = st.BackgroundColor.Value });
@@ -3413,8 +3465,8 @@ namespace HtmlPdfNative.Layout
                     var t = st.BorderTop; var b = st.BorderBottom; var l = st.BorderLeft; var r = st.BorderRight;
                     if (t.Width > 0 && t.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx, Y = ry, Width = rw, Height = t.Width, Color = t.Color });
                     if (b.Width > 0 && b.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx, Y = ry + rh - b.Width, Width = rw, Height = b.Width, Color = b.Color });
-                    if (l.Width > 0 && l.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx, Y = ry, Width = l.Width, Height = rh, Color = l.Color });
-                    if (r.Width > 0 && r.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx + rw - r.Width, Y = ry, Width = r.Width, Height = rh, Color = r.Color });
+                    if (isFirstFrag && l.Width > 0 && l.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx, Y = ry, Width = l.Width, Height = rh, Color = l.Color });
+                    if (!continues && r.Width > 0 && r.Color.A > 0) box.Decorations.Add(new SolidRect { X = rx + rw - r.Width, Y = ry, Width = r.Width, Height = rh, Color = r.Color });
                 }
                 i = j;
             }
@@ -3529,7 +3581,7 @@ namespace HtmlPdfNative.Layout
             return new string(arr);
         }
 
-        private sealed class WsCtx { public bool PendingSpace; } // true when a collapsed whitespace sits before the next word
+        private sealed class WsCtx { public float PendingSpaces; } // space-widths owed before the next word (0/1 for collapsed ws; exact count carried across nodes for white-space:pre, so leading `  ` before a &lt;span&gt; keeps its indent)
 
         private static void FlattenWords(StyledNode node, List<Word> words, float availWidth, LayoutBox? posHost, ComputedStyle? inlineBg = null, WsCtx? ws0 = null)
         {
@@ -3542,8 +3594,11 @@ namespace HtmlPdfNative.Layout
                 if (!preserveNL && !preserveSp)
                 {
                     string raw0 = node.Text;
-                    if (raw0.Length > 0 && char.IsWhiteSpace(raw0[0])) wsc.PendingSpace = true;   // leading ws → space before first token
-                    var toks = raw0.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    // U+00A0 (&nbsp;) is a NON-breaking space: it must NOT act as a word separator or collapse away —
+                    // it stays part of the token so leading `&nbsp;` indentation survives (Student.html `.math-line`
+                    // monospace columns). Only REGULAR whitespace splits words / triggers the inter-token space.
+                    if (raw0.Length > 0 && raw0[0] != ' ' && char.IsWhiteSpace(raw0[0])) wsc.PendingSpaces = 1f;   // leading ws → space before first token
+                    var toks = raw0.Split(new[] { ' ', '\t', '\n', '\r', '\f', '\v' }, StringSplitOptions.RemoveEmptyEntries);
                     // Bidi (Hebrew + Arabic): shape Arabic joining forms (logical order), then reverse to visual RTL.
                     bool rtlText = HasRtl(node.Text);
                     var start = words.Count;
@@ -3552,8 +3607,8 @@ namespace HtmlPdfNative.Layout
                     {
                         // A word carries a leading space only when whitespace actually preceded it (between tokens, or a
                         // pending inter-node space) — a token that abuts the previous inline (e.g. `,` after </b>) glues.
-                        float sb = firstTok ? (wsc.PendingSpace ? 1f : 0f) : 1f;
-                        firstTok = false; wsc.PendingSpace = false;
+                        float sb = firstTok ? (wsc.PendingSpaces) : 1f;
+                        firstTok = false; wsc.PendingSpaces = 0f;
                         string tok = ApplyTextTransform(raw, node.Style.TextTransform);
                         if (rtlText) { tok = ArabicShaper.Shape(tok); tok = VisualReorderRtl(tok); }
                         List<int>? soft = null;
@@ -3572,15 +3627,14 @@ namespace HtmlPdfNative.Layout
                         }
                         words.Add(new Word { Text = tok, Style = node.Style, Emb = FontManager.ResolveForWord(node.Style, tok), BgStyle = inlineBg, SpaceBefore = sb, SoftBreaks = soft });
                     }
-                    if (raw0.Length > 0 && char.IsWhiteSpace(raw0[raw0.Length - 1])) wsc.PendingSpace = true; // trailing ws → space before next node's word
+                    if (raw0.Length > 0 && raw0[raw0.Length - 1] != ' ' && char.IsWhiteSpace(raw0[raw0.Length - 1])) wsc.PendingSpaces = 1f; // trailing (regular) ws → space before next node's word
                     if (rtlText) words.Reverse(start, words.Count - start); // visual RTL word order
                     return;
                 }
-                TokenizePre(node.Text, node.Style, words, inlineBg, preserveNL, preserveSp);
-                wsc.PendingSpace = false;
+                TokenizePre(node.Text, node.Style, words, inlineBg, preserveNL, preserveSp, wsc);
                 return;
             }
-            if (node.Node.Tag == "br") { words.Add(new Word { Break = true, Style = node.Style }); wsc.PendingSpace = false; return; }
+            if (node.Node.Tag == "br") { words.Add(new Word { Break = true, Style = node.Style }); wsc.PendingSpaces = 0f; return; }
 
             // Atomic inline-level box: inline-block, or an inline <img>/<svg>. Laid out now at the origin;
             // positioned into the line during placement.
@@ -3589,9 +3643,26 @@ namespace HtmlPdfNative.Layout
                 var abx = new LayoutBox(node);
                 float? fw = node.Style.Width.HasValue || node.Style.WidthPercent.HasValue ? null
                           : Math.Min(MeasureMaxContent(node), availWidth);
+                // Apply min-width to the shrink-to-fit atomic: a circular `min-width:27px` badge around a single
+                // "1" must grow to 27px (then text-align:center puts the digit in the middle of the round bg) —
+                // LayoutBlock's own min-width clamp is skipped whenever forcedBorderBoxWidth is set (Student.html).
+                if (fw.HasValue)
+                {
+                    float wEx = node.Style.PadLeft + node.Style.PadRight + node.Style.BorderLeft.Width + node.Style.BorderRight.Width;
+                    float? minBB = node.Style.MinWidth.HasValue
+                        ? (node.Style.BoxSizing == "border-box" ? node.Style.MinWidth.Value : node.Style.MinWidth.Value + wEx)
+                        : (node.Style.MinWidthPct.HasValue ? availWidth * node.Style.MinWidthPct.Value : (float?)null);
+                    if (minBB.HasValue && fw.Value < minBB.Value) fw = minBB.Value;
+                }
                 LayoutBlock(node, 0, 0, availWidth, abx, null, forcedBorderBoxWidth: fw, posHost: posHost);
-                words.Add(new Word { Style = node.Style, Atomic = abx, AtomicW = abx.BorderBoxWidth, AtomicH = abx.BorderBoxHeight, SpaceBefore = wsc.PendingSpace ? 1f : 0f });
-                wsc.PendingSpace = false;
+                // MARGIN-box dimensions: LayoutBlock already offsets abx's border-box internally by (mLeft, mTop), so the
+                // atomic's origin IS its margin-box top-left. The advance and vertical-align must therefore span the
+                // margin box — otherwise inline-block margins are dropped from horizontal flow (Example my_test Test 3
+                // scale boxes bunched together instead of spread by their `margin:30px`).
+                float amW = abx.BorderBoxWidth + node.Style.MarginLeft + node.Style.MarginRight;
+                float amH = abx.BorderBoxHeight + node.Style.MarginTop + node.Style.MarginBottom;
+                words.Add(new Word { Style = node.Style, Atomic = abx, AtomicW = amW, AtomicH = amH, SpaceBefore = wsc.PendingSpaces });
+                wsc.PendingSpaces = 0f;
                 return;
             }
             // A non-block inline element with its own background OR border decorates its words (per wrapped line).
@@ -3603,10 +3674,14 @@ namespace HtmlPdfNative.Layout
         /// <summary>Tokenize text for white-space pre / pre-wrap / pre-line: newlines become forced breaks
         /// (Break words) and, for pre/pre-wrap, runs of spaces/tabs are preserved as the next word's leading
         /// space count (pre-line collapses runs to a single space). Words carry SpaceBefore in space-widths.</summary>
-        private static void TokenizePre(string text, ComputedStyle style, List<Word> words, ComputedStyle? inlineBg, bool preserveNL, bool preserveSp)
+        private static void TokenizePre(string text, ComputedStyle style, List<Word> words, ComputedStyle? inlineBg, bool preserveNL, bool preserveSp, WsCtx wsc)
         {
             var buf = new System.Text.StringBuilder();
-            float pending = 0f;   // accumulated leading spaces (space-widths) for the next word
+            // Inherit any spaces owed from a previous sibling node, and hand back the trailing spaces of a
+            // whitespace-only node so leading `  ` before a <span> in a pre block keeps its exact indent
+            // (Student.html: `  <span>3</span>47` — the "  " node emits no word, so its spaces must carry over).
+            float pending = wsc.PendingSpaces;
+            wsc.PendingSpaces = 0f;
             bool sawSpace = false;
             void Flush()
             {
@@ -3633,6 +3708,8 @@ namespace HtmlPdfNative.Layout
                 buf.Append(c);
             }
             Flush();
+            // Trailing spaces of a whitespace-only (or trailing-space) node carry to the next node's word.
+            wsc.PendingSpaces = pending;
         }
     }
 }

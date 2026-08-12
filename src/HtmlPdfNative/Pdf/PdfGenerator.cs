@@ -34,11 +34,13 @@ namespace HtmlPdfNative.Pdf
         public byte[] Save(DisplayList displayList)
         {
             if (displayList == null) throw new ArgumentNullException(nameof(displayList));
-            // Print shrink-to-fit: content substantially wider than the page (e.g. a fixed 900px design on A4) is
-            // uniformly scaled down to fit the page width — matching Chrome's fit-to-page. Gated at >5% overflow so a
-            // Letter-designed doc (~612pt) laid on A4 (595pt) is NOT falsely shrunk (that ~17pt is left to clip).
+            // Print shrink-to-fit: content substantially wider than the page (e.g. a fixed 900px design) is uniformly
+            // scaled down to fit the page width. GATED on an explicit `@page{size:…}` (matching the Rust engine): a doc
+            // that never declared a page size shouldn't be shrunk just because one stray wide element overflows — that
+            // element simply clips, and the rest stays full width (Chrome only fit-scales when the box IS the page).
+            // Also gated at >5% overflow so a Letter-designed doc (~612pt) on A4 (595pt) isn't falsely shrunk.
             float maxX = MaxRightX(displayList.Commands);
-            if (maxX > _size.Width * 1.05f)
+            if (_page.SizeExplicit && maxX > _size.Width * 1.05f)
             {
                 float s = _size.Width / maxX;
                 var scaled = displayList.Commands.ConvertAll(c => ScaleCmd(c, s));
@@ -432,6 +434,7 @@ namespace HtmlPdfNative.Pdf
                 case GradientFill g: yield return (byte)Math.Round(g.Alpha * 255); break;
                 case ImageDraw im: yield return (byte)Math.Round(im.Alpha * 255); break;
                 case OpacityGroup og: yield return (byte)Math.Round(og.Alpha * 255); break;
+                case SvgDraw sv: foreach (var a in SvgPainter.UsedAlphas(sv)) yield return a; break;
             }
         }
 
@@ -511,7 +514,7 @@ namespace HtmlPdfNative.Pdf
                       .Append(F(im.X)).Append(' ').Append(F(pdfY)).Append(" cm /").Append(imgName[im.Image]).Append(" Do Q\n");
                 }
                 else if (c is SvgDraw sv)
-                    sb.Append(SvgPainter.Paint(sv, _size.Height, faceRes, embRes));
+                    sb.Append(SvgPainter.Paint(sv, _size.Height, faceRes, embRes, alphaRes));
                 else if (c is TextRun t && !string.IsNullOrEmpty(t.Text))
                 {
                     var (cr, cg, cb) = t.Color.Rgb01();

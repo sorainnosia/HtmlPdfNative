@@ -35,7 +35,9 @@ namespace HtmlPdfNative.MathTex
                         if (seg.Display)
                         {
                             var wrap = new Node { Tag = "div", Parent = n };
-                            wrap.Attributes["style"] = "text-align:center;margin:0.7em 0;";
+                            // break-inside:avoid — a display equation is an unbreakable atomic image; if it would straddle
+                            // the page bottom it must shift WHOLE to the next page (else it renders truncated off the bottom).
+                            wrap.Attributes["style"] = "text-align:center;margin:0.7em 0;break-inside:avoid;";
                             var img = new Node { Tag = "img", Parent = wrap };
                             img.Attributes["data-latex"] = seg.Text;
                             img.Attributes["data-display"] = "1";

@@ -199,6 +199,10 @@ namespace HtmlPdfNative.Css
             {
                 case "": case "px": return v * Lib.PxToPt;
                 case "pt": return v;
+                case "mm": return v * 72f / 25.4f;          // 1mm = 72/25.4 pt
+                case "cm": return v * 720f / 25.4f;         // 1cm = 10mm
+                case "in": return v * 72f;                  // 1in = 72pt
+                case "pc": return v * 12f;                  // 1pc = 12pt
                 default: return null;   // em/rem/vw/vh need context → fall back to stripping (no PosPx)
             }
         }
@@ -210,7 +214,8 @@ namespace HtmlPdfNative.Css
             int e = 0; while (e < t.Length && (char.IsDigit(t[e]) || t[e] == '.' || t[e] == '-' || t[e] == '+')) e++;
             if (e == 0) return false;
             string unit = t.Substring(e);
-            return unit == "" || unit == "px" || unit == "pt" || unit == "em" || unit == "rem" || unit == "vw" || unit == "vh";
+            return unit == "" || unit == "px" || unit == "pt" || unit == "mm" || unit == "cm" || unit == "in" || unit == "pc"
+                || unit == "em" || unit == "rem" || unit == "vw" || unit == "vh";
         }
 
         private static float? ParseStopPos(string tail)

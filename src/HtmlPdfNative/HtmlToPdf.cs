@@ -74,7 +74,11 @@ namespace HtmlPdfNative
 
             var document = Dom.Document.Parse(html);
             MathTex.MathPreprocessor.Process(document.Root); // $…$ / \[…\] → <img data-latex> placeholders
-            var (stylesheet, pageConfig) = Css.Stylesheet.Parse(css, document, size.Width / Lib.PxToPt); // media-query width in px
+            // Chrome resolves @media width features against the printable CONTENT width (page minus
+            // margins), which is what makes narrow-print breakpoints like max-width:800px match.
+            // @page margins aren't known until Parse runs, so approximate with Chrome's default margin.
+            float mediaWidthPx = (size.Width - 2f * Lib.ChromeDefaultPrintMarginPt) / Lib.PxToPt;
+            var (stylesheet, pageConfig) = Css.Stylesheet.Parse(css, document, mediaWidthPx); // media-query width in px
             Lib.ApplyDefaultPageMargin(pageConfig); // Chrome ~27.75pt default when no @page margin
             var styleComputer = new Style.StyleComputer(stylesheet);
             var styledRoot = Styled.StyledNode.Build(document.Root, styleComputer);

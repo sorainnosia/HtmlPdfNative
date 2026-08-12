@@ -18,7 +18,8 @@ namespace HtmlPdfNative.Style
         public float OutlineOffset;           // gap between the border edge and the outline, pt
 
         public float FontSizePt = 12f;      // inherited
-        public bool Bold;                    // inherited
+        public bool Bold;                    // inherited (base-14 bold flag: weight >= 600)
+        public int Weight = 400;             // inherited — numeric font-weight, for @font-face nearest-weight matching
         public bool Italic;                  // inherited
         public string FontFamily = "sans-serif"; // inherited
         public Color Color = Color.Black;    // inherited
@@ -288,7 +289,7 @@ namespace HtmlPdfNative.Style
         /// <summary>Copy all inherited properties from a parent computed style.</summary>
         private static void CopyInherited(ComputedStyle cs, ComputedStyle parent)
         {
-            cs.FontSizePt = parent.FontSizePt; cs.Bold = parent.Bold; cs.Italic = parent.Italic;
+            cs.FontSizePt = parent.FontSizePt; cs.Bold = parent.Bold; cs.Weight = parent.Weight; cs.Italic = parent.Italic;
             cs.FontFamily = parent.FontFamily; cs.Color = parent.Color; cs.TextAlign = parent.TextAlign; cs.TextAlignLast = parent.TextAlignLast; cs.Direction = parent.Direction;
             cs.TextShadows = parent.TextShadows; // inherited
             cs.LineHeightPt = parent.LineHeightPt; cs.LineHeightMul = parent.LineHeightMul; cs.ListStyleType = parent.ListStyleType; cs.ListStylePosition = parent.ListStylePosition; cs.ListStyleImage = parent.ListStyleImage; cs.Quotes = parent.Quotes;
@@ -377,7 +378,18 @@ namespace HtmlPdfNative.Style
                 cs.FontSizePt = Values.LengthPt(fs, parentFont, parentFont) ?? cs.FontSizePt;
             if (raw.TryGetValue("font-family", out var ff)) cs.FontFamily = ff;
             if (raw.TryGetValue("font-weight", out var fw))
-                cs.Bold = fw == "bold" || fw == "bolder" || (int.TryParse(fw, out var w) && w >= 600);
+            {
+                fw = fw.Trim();
+                int wv;
+                if (fw == "bold") wv = 700;
+                else if (fw == "normal") wv = 400;
+                else if (fw == "bolder") wv = System.Math.Min(900, cs.Weight + 300);
+                else if (fw == "lighter") wv = System.Math.Max(100, cs.Weight - 300);
+                else if (int.TryParse(fw, out var wn)) wv = wn;
+                else wv = cs.Weight;
+                cs.Weight = wv;
+                cs.Bold = wv >= 600; // base-14 bold flag
+            }
             if (raw.TryGetValue("font-style", out var fst)) cs.Italic = fst == "italic" || fst == "oblique";
             if (raw.TryGetValue("color", out var col)) { var c = Values.ParseColor(col); if (c != null) cs.Color = c.Value; }
             // SVG presentation properties (stored raw for SvgPainter; var() already substituted by the cascade).
@@ -493,7 +505,10 @@ namespace HtmlPdfNative.Style
                 else { var c = Values.ParseColor(bgsh); if (c != null) cs.BackgroundColor = c; }
             }
             if (raw.TryGetValue("background-color", out var bgc)) { var c = Values.ParseColor(bgc); if (c != null) cs.BackgroundColor = c; }
+            // Accept the `-webkit-` prefixed form too — `background-clip:text` (gradient text) is very often written
+            // ONLY as `-webkit-background-clip:text` (e.g. Example27 `.line2`); the unprefixed value wins when both exist.
             if (raw.TryGetValue("background-clip", out var bgclp)) cs.BackgroundClip = bgclp.Trim().ToLowerInvariant();
+            else if (raw.TryGetValue("-webkit-background-clip", out var wbgclp)) cs.BackgroundClip = wbgclp.Trim().ToLowerInvariant();
             if (raw.TryGetValue("background-origin", out var bgor)) cs.BackgroundOrigin = bgor.Trim().ToLowerInvariant();
             if (raw.TryGetValue("clip-path", out var clpp) && clpp.Trim().ToLowerInvariant() != "none") cs.ClipPath = clpp.Trim();
             if (raw.TryGetValue("mix-blend-mode", out var mbm)) { var m = mbm.Trim().ToLowerInvariant(); if (m != "normal") cs.MixBlendMode = m; }
@@ -896,7 +911,14 @@ namespace HtmlPdfNative.Style
             {
                 var sb = System.Text.RegularExpressions.Regex.Match(b, @"span\s+(\d+)");
                 if (sb.Success) span = Math.Max(1, int.Parse(sb.Groups[1].Value));
-                else if (int.TryParse(b, out var endLine)) { if (start.HasValue && endLine > start.Value) span = endLine - start.Value; }
+                else if (int.TryParse(b, out var endLine))
+                {
+                    // Negative end line counts from the end: `-1` = the LAST grid line (so `grid-column: 1 / -1` = span
+                    // ALL columns, the full-width pattern). Column count isn't known here → use a large sentinel span
+                    // that LayoutGrid clamps to the track count (`Math.Min(cs, cols)`).
+                    if (endLine < 0) span = 100000;
+                    else if (start.HasValue && endLine > start.Value) span = endLine - start.Value;
+                }
                 else if (b.Length > 0) endName = b;                  // named end line
             }
         }
@@ -1314,6 +1336,7 @@ namespace HtmlPdfNative.Style
                 case "h4": D("font-size", "1em"); D("font-weight", "bold"); D("margin", "1.33em 0"); break;
                 case "h5": D("font-size", "0.83em"); D("font-weight", "bold"); D("margin", "1.67em 0"); break;
                 case "h6": D("font-size", "0.67em"); D("font-weight", "bold"); D("margin", "2.33em 0"); break;
+                case "body": D("margin", "8px"); break;   // UA default (Chrome/Rust) — content inset 8px inside the page box
                 case "p": D("margin", "1em 0"); break;
                 case "b": case "strong": D("font-weight", "bold"); break;
                 case "i": case "em": D("font-style", "italic"); break;

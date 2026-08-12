@@ -310,11 +310,13 @@ namespace HtmlPdfNative.Css
                 int colon = t.IndexOf(':');
                 if (colon < 0) { ok = false; continue; } // an unknown bare type → not print
                 string feat = t.Substring(0, colon).Trim();
-                float val = FeatureValuePx(t.Substring(colon + 1).Trim());
-                // A PDF renders the author's DESKTOP layout: `max-width` (mobile/tablet) breakpoints are never applied
-                // (matches the Rust engine's extract_media_print_rules — "PDFs should render the desktop layout").
-                if (feat == "max-width") ok = false;
-                else if (feat == "min-width" && widthPx < val - 0.01f) ok = false;
+                _ = FeatureValuePx(t.Substring(colon + 1).Trim());
+                // Desktop-layout policy (user-chosen; matches Rust media_query_applies): render the
+                // author's DESKTOP design with an effectively UNBOUNDED viewport, NOT Chrome's narrow
+                // print page. So `max-width` (mobile/tablet) breakpoints never apply (keeps multi-column
+                // grids), while `min-width` (desktop) breakpoints are treated as satisfied.
+                if (feat == "max-width" || feat == "max-device-width") ok = false;
+                // min-width/min-device-width and other features: satisfied by the unbounded viewport.
                 // min/max-height/orientation/resolution: not modeled → ignored (lenient match)
             }
             return negate ? !ok : ok;
@@ -337,14 +339,20 @@ namespace HtmlPdfNative.Css
         private static void ApplyFontFace(string body)
         {
             string? family = null, srcVal = null;
-            bool bold = false, italic = false;
+            int weight = 400; bool italic = false;
             foreach (var d in ParseDeclarations(body))
             {
                 switch (d.Property)
                 {
                     case "font-family": family = d.Value.Trim().Trim('"', '\''); break;
                     case "src": srcVal = d.Value; break;
-                    case "font-weight": bold = d.Value.Trim() == "bold" || (int.TryParse(d.Value.Trim(), out var w) && w >= 600); break;
+                    case "font-weight":
+                        // A @font-face may declare a single weight or a range ("400 800"); key off the first number.
+                        var wv = d.Value.Trim();
+                        if (wv == "bold") weight = 700;
+                        else if (wv == "normal") weight = 400;
+                        else { var wm = Regex.Match(wv, @"\d+"); if (wm.Success && int.TryParse(wm.Value, out var wn)) weight = wn; }
+                        break;
                     case "font-style": var fs = d.Value.Trim(); italic = fs == "italic" || fs == "oblique"; break;
                 }
             }
@@ -367,7 +375,7 @@ namespace HtmlPdfNative.Css
                 if (!sfnt && !woff1 && !woff2) continue;        // unknown format
                 chosen = url; if (sfnt) break;                 // prefer sfnt; else woff1/woff2 (decoded in FontManager)
             }
-            if (chosen != null) Fonts.FontManager.RegisterFontFace(family, chosen, bold, italic);
+            if (chosen != null) Fonts.FontManager.RegisterFontFace(family, chosen, weight, italic);
         }
 
         private static int FindMatchingBrace(string s, int open)

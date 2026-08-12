@@ -40,7 +40,7 @@ namespace HtmlPdfNative.Styled
                 var ts = new Style.ComputedStyle();
                 if (parent != null)
                 {
-                    ts.FontSizePt = parent.FontSizePt; ts.Bold = parent.Bold; ts.Italic = parent.Italic;
+                    ts.FontSizePt = parent.FontSizePt; ts.Bold = parent.Bold; ts.Weight = parent.Weight; ts.Italic = parent.Italic;
                     ts.FontFamily = parent.FontFamily; ts.Color = parent.Color; ts.TextAlign = parent.TextAlign; ts.TextAlignLast = parent.TextAlignLast;
                     ts.LineHeightPt = parent.LineHeightPt; ts.LineHeightMul = parent.LineHeightMul; // BOTH — unitless line-height inherits as a multiplier
                     ts.TextDecorationLine = parent.TextDecorationLine; ts.TextDecorationColor = parent.TextDecorationColor; ts.TextDecorationStyle = parent.TextDecorationStyle;

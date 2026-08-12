@@ -47,6 +47,50 @@ namespace HtmlPdfNative.Images
         /// <summary>Resolve a <c>url()</c>/<c>src</c> (data: URI or file path vs BaseDirectory) to raw bytes.</summary>
         public static byte[]? ReadBytes(string src) => ResolveBytes(src);
 
+        /// <summary>Fetch an external CSS stylesheet (e.g. a Google Fonts <c>&lt;link&gt;</c>) as text. Uses a plain
+        /// User-Agent so Google Fonts' <c>css2</c> endpoint serves <c>format('truetype')</c> (TTF) URLs, keeping the
+        /// font path on the simple sfnt codepath. Returns null on failure / when networking is disabled.</summary>
+        public static string? FetchStylesheet(string url)
+        {
+            if (!AllowNetwork || string.IsNullOrWhiteSpace(url)) return null;
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return null;
+            try
+            {
+                using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url))
+                {
+                    req.Headers.TryAddWithoutValidation("User-Agent", "pdfmaker/0.1 (font-downloader)");
+                    var resp = EnsureHttp().SendAsync(req).GetAwaiter().GetResult();
+                    if (!resp.IsSuccessStatusCode) return null;
+                    var text = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    return string.IsNullOrWhiteSpace(text) ? null : text;
+                }
+            }
+            catch (Exception ex) { System.Console.Error.WriteLine("[NET] stylesheet fetch failed " + url + ": " + ex.Message); return null; }
+        }
+
+        /// <summary>If <paramref name="src"/> resolves to SVG (data:image/svg+xml, .svg file, or any bytes that
+        /// contain <c>&lt;svg</c>), parse it into an SVG DOM node so an <c>&lt;img&gt;</c> can be drawn as VECTORS by the
+        /// same path as an inline <c>&lt;svg&gt;</c>. Works for base64/URL-encoded data URIs, file, url and relative
+        /// paths (the byte resolution is shared with raster images). Returns null for non‑SVG / on any failure.</summary>
+        public static Dom.Node? LoadSvgNode(string? src)
+        {
+            if (string.IsNullOrWhiteSpace(src)) return null;
+            try
+            {
+                var s = src!.Trim();
+                // Quick reject unless it's plausibly SVG (svg+xml data URI, a .svg URL/path, or an inline <svg …>).
+                bool maybe = s.IndexOf("svg", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!maybe) return null;
+                byte[]? bytes = ResolveBytes(s);
+                if (bytes == null || bytes.Length == 0) return null;
+                string text = System.Text.Encoding.UTF8.GetString(bytes);
+                if (text.IndexOf("<svg", StringComparison.OrdinalIgnoreCase) < 0) return null;
+                return Dom.Document.ParseSvgFragment(text);
+            }
+            catch { return null; }
+        }
+
         private static byte[]? ResolveBytes(string src)
         {
             src = src.Trim();
@@ -80,6 +124,19 @@ namespace HtmlPdfNative.Images
             = new System.Collections.Generic.Dictionary<string, byte[]?>();
         private static System.Net.Http.HttpClient? _http;
 
+        /// <summary>Lazily create the shared HttpClient with a browser-ish default UA (some CDNs incl. Google Fonts
+        /// 403 or content-negotiate on the User-Agent). Per-request UA overrides via HttpRequestMessage still win.</summary>
+        private static System.Net.Http.HttpClient EnsureHttp()
+        {
+            if (_http == null)
+            {
+                _http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HtmlPdfNative/1.0");
+            }
+            return _http;
+        }
+
         /// <summary>Download a URL to bytes (cached; 10s timeout; graceful null on any failure).</summary>
         private static byte[]? FetchUrl(string url)
         {
@@ -87,14 +144,7 @@ namespace HtmlPdfNative.Images
             byte[]? result = null;
             try
             {
-                if (_http == null)
-                {
-                    _http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                    // A browser-ish UA: some CDNs (incl. Google Fonts) 403 or content-negotiate on the User-Agent.
-                    _http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HtmlPdfNative/1.0");
-                }
-                result = _http.GetByteArrayAsync(url).GetAwaiter().GetResult();
+                result = EnsureHttp().GetByteArrayAsync(url).GetAwaiter().GetResult();
             }
             catch (Exception ex) { System.Console.Error.WriteLine("[NET] fetch failed " + url + ": " + ex.Message); result = null; }
             lock (_urlCache) _urlCache[url] = result;

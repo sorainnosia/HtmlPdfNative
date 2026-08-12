@@ -407,8 +407,13 @@ namespace HtmlPdfNative.MathTex
             {
                 case "\\frac": case "\\dfrac": case "\\tfrac":
                 {
-                    var n = ParseAtomOrGroup(ts, tk == "\\tfrac" ? env.Script() : env);
-                    var d = ParseAtomOrGroup(ts, tk == "\\tfrac" ? env.Script() : env);
+                    // TeX: numerator/denominator drop to scriptstyle (~0.7×) in TEXTSTYLE (inline `\frac`, `\tfrac`);
+                    // displaystyle (`\dfrac`, or `\frac` inside `\[…\]`) keeps them full. Without this, inline fractions
+                    // (Example33) render ~1.6× too tall/wide → they grow the line height and wrap the paragraph early.
+                    bool compact = tk == "\\tfrac" || (tk == "\\frac" && !env.Display);
+                    var fe = compact ? env.Script() : env;
+                    var n = ParseAtomOrGroup(ts, fe);
+                    var d = ParseAtomOrGroup(ts, fe);
                     return new Atom { B = new Frac(n, d, env.Size, true), C = Cls.Inner };
                 }
                 case "\\binom": case "\\dbinom": case "\\tbinom":

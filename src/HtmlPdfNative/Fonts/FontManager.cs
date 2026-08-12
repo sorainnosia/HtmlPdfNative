@@ -16,22 +16,26 @@ namespace HtmlPdfNative.Fonts
         private static readonly Dictionary<string, EmbeddedFont?> Loaded = new Dictionary<string, EmbeddedFont?>();
         private static readonly object Gate = new object();
 
-        // @font-face registry: key = "family|B|I" (lowercased family), value = the loaded custom font.
-        private static readonly Dictionary<string, EmbeddedFont?> CustomFaces = new Dictionary<string, EmbeddedFont?>();
+        // @font-face registry: key = "family|I" (lowercased family + italic flag), value = the loaded
+        // custom faces for that family/style at each declared numeric weight. ResolveCustom picks the
+        // nearest weight so e.g. font-weight:800 selects Syne ExtraBold rather than a collapsed "bold".
+        private static readonly Dictionary<string, System.Collections.Generic.List<(int weight, EmbeddedFont font)>> CustomFaces
+            = new Dictionary<string, System.Collections.Generic.List<(int weight, EmbeddedFont font)>>();
 
         /// <summary>Reset the @font-face registry (called per conversion so families don't leak across docs).</summary>
         public static void ClearFontFaces() { lock (Gate) CustomFaces.Clear(); }
 
         /// <summary>Register a @font-face: load the font file at <paramref name="src"/> (data: URI or path) and
         /// key it by family + weight/style. WOFF/WOFF2 are skipped (raw TTF/OTF only).</summary>
-        public static void RegisterFontFace(string family, string src, bool bold, bool italic)
+        public static void RegisterFontFace(string family, string src, int weight, bool italic)
         {
             if (string.IsNullOrWhiteSpace(family) || string.IsNullOrWhiteSpace(src)) return;
             string fam = family.Trim().Trim('"', '\'').ToLowerInvariant();
-            string key = fam + "|" + (bold ? "B" : "") + "|" + (italic ? "I" : "");
+            string key = fam + "|" + (italic ? "I" : "");
             lock (Gate)
             {
-                if (CustomFaces.ContainsKey(key)) return;
+                if (!CustomFaces.TryGetValue(key, out var list)) { list = new System.Collections.Generic.List<(int, EmbeddedFont)>(); CustomFaces[key] = list; }
+                foreach (var e in list) if (e.weight == weight) return; // this weight already registered
                 EmbeddedFont? result = null;
                 try
                 {
@@ -40,10 +44,10 @@ namespace HtmlPdfNative.Fonts
                     if (bytes != null && Woff.IsWoff(bytes)) bytes = Woff.TryDecode(bytes);
                     else if (bytes != null && Woff.IsWoff2(bytes)) { var dc = Woff2.TryDecode(bytes); System.Console.Error.WriteLine("[FONT] woff2 -> " + (dc == null ? "null" : dc.Length + "B sfnt=" + (dc.Length > 4 && IsSfnt(dc)))); bytes = dc; }
                     if (bytes != null && bytes.Length > 4 && IsSfnt(bytes))
-                        result = new EmbeddedFont(TtfFace.Parse(bytes), "WF_" + fam.Replace(" ", ""));
+                        result = new EmbeddedFont(TtfFace.Parse(bytes), "WF_" + fam.Replace(" ", "") + "_" + weight + (italic ? "i" : ""));
                 }
                 catch (System.Exception ex) { System.Console.Error.WriteLine("[FONT] @font-face load failed " + src + ": " + ex.Message); }
-                CustomFaces[key] = result;
+                if (result != null) list.Add((weight, result));
             }
         }
 
@@ -55,7 +59,7 @@ namespace HtmlPdfNative.Fonts
         }
 
         /// <summary>Return a registered @font-face font matching any family in the CSS font-family list, or null.</summary>
-        public static EmbeddedFont? ResolveCustom(string? fontFamily, bool bold, bool italic)
+        public static EmbeddedFont? ResolveCustom(string? fontFamily, int weight, bool italic)
         {
             if (string.IsNullOrEmpty(fontFamily) || CustomFaces.Count == 0) return null;
             lock (Gate)
@@ -64,12 +68,26 @@ namespace HtmlPdfNative.Fonts
                 {
                     string fam = raw.Trim().Trim('"', '\'').ToLowerInvariant();
                     if (fam.Length == 0) continue;
-                    // Prefer the exact weight/style; fall back to the regular face of the same family.
-                    foreach (var key in new[] { fam + "|" + (bold ? "B" : "") + "|" + (italic ? "I" : ""), fam + "||" })
-                        if (CustomFaces.TryGetValue(key, out var f) && f != null) return f;
+                    // Prefer the requested style (italic), then the upright faces of the same family.
+                    foreach (var key in new[] { fam + "|" + (italic ? "I" : ""), fam + "|" })
+                        if (CustomFaces.TryGetValue(key, out var list) && list != null && list.Count > 0)
+                            return NearestWeight(list, weight);
                 }
             }
             return null;
+        }
+
+        /// <summary>Pick the face whose numeric weight is closest to the requested weight, breaking ties
+        /// toward the heavier face (a mild nod to the CSS font-matching preference for weights >= 400).</summary>
+        private static EmbeddedFont NearestWeight(System.Collections.Generic.List<(int weight, EmbeddedFont font)> list, int want)
+        {
+            var best = list[0];
+            foreach (var e in list)
+            {
+                int d = System.Math.Abs(e.weight - want), bd = System.Math.Abs(best.weight - want);
+                if (d < bd || (d == bd && e.weight > best.weight)) best = e;
+            }
+            return best.font;
         }
 
         // The CP1252 (WinAnsi) high-range specials that ARE representable by the base-14 fonts.
@@ -112,7 +130,7 @@ namespace HtmlPdfNative.Fonts
         public static EmbeddedFont? ResolveForWord(ComputedStyle style, string word)
         {
             // A matching @font-face wins for ALL of the element's text (even plain ASCII), so it embeds.
-            var custom = ResolveCustom(style.FontFamily, style.Bold, style.Italic);
+            var custom = ResolveCustom(style.FontFamily, style.Weight, style.Italic);
             if (custom != null) return custom;
             return ResolveScript(style.Bold, word);
         }

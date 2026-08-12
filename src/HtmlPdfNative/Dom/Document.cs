@@ -49,9 +49,43 @@ namespace HtmlPdfNative.Dom
             foreach (var s in doc.QuerySelectorAll("style"))
                 styles.Append(s.TextContent).Append('\n');
 
+            // External stylesheets: fetch each `<link rel="stylesheet" href>` (e.g. Google Fonts) and treat its CSS
+            // like an inline <style> so its @font-face rules load. Without this, web fonts silently fall back.
+            foreach (var link in doc.QuerySelectorAll("link"))
+            {
+                var rel = link.GetAttribute("rel") ?? "";
+                bool isSheet = false;
+                foreach (var tok in rel.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+                    if (string.Equals(tok, "stylesheet", StringComparison.OrdinalIgnoreCase)) { isSheet = true; break; }
+                if (!isSheet) continue;
+                var href = link.GetAttribute("href");
+                if (string.IsNullOrWhiteSpace(href)) continue;
+                if (href!.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    href.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    var css = Images.ImageLoader.FetchStylesheet(href);
+                    if (css != null) { System.Console.WriteLine("Loaded external stylesheet: " + href); styles.Append(css).Append('\n'); }
+                }
+            }
+
             IElement bodyEl = doc.Body ?? doc.DocumentElement;
             Node root = Convert(bodyEl, null);
             return new Document(root, styles.ToString());
+        }
+
+        /// <summary>Parse a standalone SVG document/fragment (e.g. from <c>&lt;img src="…svg…"&gt;</c>) into the engine's
+        /// Node tree — the &lt;svg&gt; element — so it can be drawn by the same vector path as an inline &lt;svg&gt;.</summary>
+        public static Node? ParseSvgFragment(string svgXml)
+        {
+            if (string.IsNullOrWhiteSpace(svgXml)) return null;
+            try
+            {
+                var parser = new HtmlParser();
+                IDocument doc = parser.ParseDocument("<!doctype html><body>" + svgXml + "</body>");
+                var svgEl = doc.QuerySelector("svg");
+                return svgEl != null ? Convert(svgEl, null) : null;
+            }
+            catch { return null; }
         }
 
         private static readonly HashSet<string> Skip =
