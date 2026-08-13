@@ -132,6 +132,16 @@ namespace HtmlPdfNative.Fonts
             // A matching @font-face wins for ALL of the element's text (even plain ASCII), so it embeds.
             var custom = ResolveCustom(style.FontFamily, style.Weight, style.Italic);
             if (custom != null) return custom;
+            // Georgia → bundled Gelasio (OFL, metric-compatible), embedded like the Rust engine (font.rs)
+            // instead of mapped to base-14 Times. Times-Italic's AFM advances ignore the italic ink
+            // overhang, so advance-positioned words looked cramped (spaces eaten); Gelasio's real metrics
+            // (used for BOTH measure and render) restore the gap. Only for Latin-ish words — a word that
+            // needs a dedicated non-Latin script falls through to the Noto routing below.
+            if (Afm.IsGeorgia(style.FontFamily) && !NeedsNonLatinScript(word))
+            {
+                var gel = LoadGelasio(style.Bold, style.Italic);
+                if (gel != null) return gel;
+            }
             return ResolveScript(style.Bold, word);
         }
 
@@ -195,6 +205,27 @@ namespace HtmlPdfNative.Fonts
                 if (f != null && f.Face.GlyphId(cp) != 0) return f;
             }
             return noto;
+        }
+
+        /// <summary>Bundled Gelasio (OFL Georgia substitute) for the requested style, loaded + cached.</summary>
+        private static EmbeddedFont? LoadGelasio(bool bold, bool italic)
+        {
+            string file = bold
+                ? (italic ? "fonts/Gelasio-BoldItalic.ttf" : "fonts/Gelasio-Bold.ttf")
+                : (italic ? "fonts/Gelasio-Italic.ttf" : "fonts/Gelasio-Regular.ttf");
+            string name = bold
+                ? (italic ? "GelasioBoldItalic" : "GelasioBold")
+                : (italic ? "GelasioItalic" : "GelasioRegular");
+            return Load(file, name);
+        }
+
+        /// <summary>True if the word contains a character belonging to a dedicated non-Latin script
+        /// (CJK, Arabic, Hebrew, math/symbols) that the Latin Gelasio face cannot render.</summary>
+        private static bool NeedsNonLatinScript(string word)
+        {
+            foreach (var cp in EmbeddedFont.Codepoints(word))
+                if (ScriptOf(cp) != Script.Latin) return true;
+            return false;
         }
 
         /// <summary>Bundled Noto Sans fallback (regular/bold), loaded + cached from Assets.</summary>

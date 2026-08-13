@@ -148,5 +148,25 @@ namespace HtmlPdfNative.Fonts
             foreach (var n in names) if (f.Contains(n)) return true;
             return false;
         }
+
+        // Georgia is a serif that we substitute with the bundled OFL "Gelasio" (metric-compatible),
+        // embedded rather than mapped to base-14 Times — matching the Rust engine (font.rs). Only true
+        // when Georgia/Gelasio is the FIRST resolvable family (a preceding mono/sans/other family wins).
+        private static readonly string[] GeorgiaNames = { "georgia", "gelasio" };
+        public static bool IsGeorgia(string? family)
+        {
+            foreach (var raw in (family ?? "").Split(','))
+            {
+                var f = raw.Trim().Trim('"', '\'').Trim().ToLowerInvariant();
+                if (f.Length == 0) continue;
+                // Same priority as Resolve: mono, sans, then serif — so an earlier family claims the slot.
+                if (Matches(f, MonoNames)) return false;
+                if (Matches(f, SansNames)) return false;
+                if (Matches(f, GeorgiaNames)) return true;
+                if (Matches(f, SerifNames)) return false;
+                // Unknown named font: fall through to the next family in the list.
+            }
+            return false;
+        }
     }
 }
